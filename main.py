@@ -13,6 +13,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 
+# ============================================================
+# 网站配置
+# ============================================================
+
 CN_BASE = "http://www.cnho.mil.cn"
 CN_LIST_PAGE = f"{CN_BASE}/tg/pdf"
 CN_LIST_API = f"{CN_BASE}/getPdfList"
@@ -28,11 +32,20 @@ USER_AGENT = (
 )
 
 
+# ============================================================
+# 异常
+# ============================================================
+
 class DownloaderError(Exception):
     pass
 
 
+# ============================================================
+# 工具函数
+# ============================================================
+
 def is_pdf(path: Path) -> bool:
+    """检查文件是否为真正的 PDF。"""
     try:
         with path.open("rb") as f:
             return f.read(5) == b"%PDF-"
@@ -41,6 +54,7 @@ def is_pdf(path: Path) -> bool:
 
 
 def safe_remove(path: Path):
+    """安全删除文件。"""
     try:
         if path.exists():
             path.unlink()
@@ -48,104 +62,288 @@ def safe_remove(path: Path):
         pass
 
 
+# ============================================================
+# 主程序
+# ============================================================
+
 class App:
+
     def __init__(self, root):
         self.root = root
+
         self.root.title("航海通告批量下载器")
         self.root.geometry("820x650")
         self.root.minsize(760, 580)
 
+        # 消息队列
         self.msg_queue = queue.Queue()
+
+        # 工作线程
         self.worker = None
+
+        # 停止事件
         self.stop_event = threading.Event()
 
-        self.type_var = tk.StringVar(value="中国版航海通告")
-        self.year_var = tk.StringVar(value=str(time.localtime().tm_year))
+        # GUI 变量
+        self.type_var = tk.StringVar(
+            value="中国版航海通告"
+        )
+
+        self.year_var = tk.StringVar(
+            value=str(time.localtime().tm_year)
+        )
+
         self.dir_var = tk.StringVar(
             value=str(Path.home() / "Admiralty")
         )
-        self.status_var = tk.StringVar(value="就绪")
-        self.count_var = tk.StringVar(value="成功：0    跳过：0    失败：0")
-        self.progress_var = tk.DoubleVar(value=0)
 
+        self.status_var = tk.StringVar(
+            value="就绪"
+        )
+
+        self.count_var = tk.StringVar(
+            value="成功：0    跳过：0    未发布：0    失败：0"
+        )
+
+        self.progress_var = tk.DoubleVar(
+            value=0
+        )
+
+        # 统计
         self.success = 0
         self.skip = 0
+        self.not_published = 0
         self.fail = 0
+
         self.failed_rows = []
 
+        # 创建界面
         self.build_ui()
-        self.root.after(100, self.process_queue)
+
+        # 启动消息处理
+        self.root.after(
+            100,
+            self.process_queue
+        )
+
+    # ========================================================
+    # GUI
+    # ========================================================
 
     def build_ui(self):
-        outer = ttk.Frame(self.root, padding=16)
-        outer.pack(fill="both", expand=True)
+
+        outer = ttk.Frame(
+            self.root,
+            padding=16
+        )
+        outer.pack(
+            fill="both",
+            expand=True
+        )
 
         title = ttk.Label(
             outer,
             text="航海通告批量下载器",
             font=("Microsoft YaHei UI", 18, "bold")
         )
-        title.pack(anchor="w", pady=(0, 14))
+        title.pack(
+            anchor="w",
+            pady=(0, 14)
+        )
 
-        form = ttk.LabelFrame(outer, text="下载设置", padding=12)
-        form.pack(fill="x")
+        # ----------------------------------------------------
+        # 下载设置
+        # ----------------------------------------------------
 
-        ttk.Label(form, text="下载类型：").grid(row=0, column=0, sticky="w", pady=6)
+        form = ttk.LabelFrame(
+            outer,
+            text="下载设置",
+            padding=12
+        )
+        form.pack(
+            fill="x"
+        )
+
+        ttk.Label(
+            form,
+            text="下载类型："
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            pady=6
+        )
+
         type_box = ttk.Combobox(
             form,
             textvariable=self.type_var,
-            values=["中国版航海通告", "英国版 UKHO Weekly Notices"],
+            values=[
+                "中国版航海通告",
+                "英国版 UKHO Weekly Notices"
+            ],
             state="readonly",
             width=34
         )
-        type_box.grid(row=0, column=1, sticky="w", pady=6)
 
-        ttk.Label(form, text="年份：").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Entry(form, textvariable=self.year_var, width=20).grid(
-            row=1, column=1, sticky="w", pady=6
+        type_box.grid(
+            row=0,
+            column=1,
+            sticky="w",
+            pady=6
         )
 
-        ttk.Label(form, text="保存目录：").grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Entry(form, textvariable=self.dir_var, width=55).grid(
-            row=2, column=1, sticky="we", pady=6
+        ttk.Label(
+            form,
+            text="年份："
+        ).grid(
+            row=1,
+            column=0,
+            sticky="w",
+            pady=6
         )
-        ttk.Button(form, text="浏览...", command=self.choose_dir).grid(
-            row=2, column=2, padx=(8, 0), pady=6
-        )
-        form.columnconfigure(1, weight=1)
 
-        buttons = ttk.Frame(outer)
-        buttons.pack(fill="x", pady=12)
-
-        self.start_btn = ttk.Button(
-            buttons, text="开始下载", command=self.start
+        ttk.Entry(
+            form,
+            textvariable=self.year_var,
+            width=20
+        ).grid(
+            row=1,
+            column=1,
+            sticky="w",
+            pady=6
         )
-        self.start_btn.pack(side="left")
 
-        self.stop_btn = ttk.Button(
-            buttons, text="停止", command=self.stop, state="disabled"
+        ttk.Label(
+            form,
+            text="保存目录："
+        ).grid(
+            row=2,
+            column=0,
+            sticky="w",
+            pady=6
         )
-        self.stop_btn.pack(side="left", padx=8)
+
+        ttk.Entry(
+            form,
+            textvariable=self.dir_var,
+            width=55
+        ).grid(
+            row=2,
+            column=1,
+            sticky="we",
+            pady=6
+        )
 
         ttk.Button(
-            buttons, text="打开保存目录", command=self.open_dir
-        ).pack(side="right")
+            form,
+            text="浏览...",
+            command=self.choose_dir
+        ).grid(
+            row=2,
+            column=2,
+            padx=(8, 0),
+            pady=6
+        )
 
-        status_frame = ttk.Frame(outer)
-        status_frame.pack(fill="x")
+        form.columnconfigure(
+            1,
+            weight=1
+        )
 
-        ttk.Label(status_frame, textvariable=self.status_var).pack(anchor="w")
+        # ----------------------------------------------------
+        # 按钮
+        # ----------------------------------------------------
+
+        buttons = ttk.Frame(
+            outer
+        )
+        buttons.pack(
+            fill="x",
+            pady=12
+        )
+
+        self.start_btn = ttk.Button(
+            buttons,
+            text="开始下载",
+            command=self.start
+        )
+
+        self.start_btn.pack(
+            side="left"
+        )
+
+        self.stop_btn = ttk.Button(
+            buttons,
+            text="停止",
+            command=self.stop,
+            state="disabled"
+        )
+
+        self.stop_btn.pack(
+            side="left",
+            padx=8
+        )
+
+        ttk.Button(
+            buttons,
+            text="打开保存目录",
+            command=self.open_dir
+        ).pack(
+            side="right"
+        )
+
+        # ----------------------------------------------------
+        # 状态
+        # ----------------------------------------------------
+
+        status_frame = ttk.Frame(
+            outer
+        )
+        status_frame.pack(
+            fill="x"
+        )
+
+        ttk.Label(
+            status_frame,
+            textvariable=self.status_var
+        ).pack(
+            anchor="w"
+        )
+
         self.progress = ttk.Progressbar(
             status_frame,
             variable=self.progress_var,
             maximum=100,
             mode="determinate"
         )
-        self.progress.pack(fill="x", pady=7)
-        ttk.Label(status_frame, textvariable=self.count_var).pack(anchor="w")
 
-        log_frame = ttk.LabelFrame(outer, text="运行日志", padding=8)
-        log_frame.pack(fill="both", expand=True, pady=(12, 0))
+        self.progress.pack(
+            fill="x",
+            pady=7
+        )
+
+        ttk.Label(
+            status_frame,
+            textvariable=self.count_var
+        ).pack(
+            anchor="w"
+        )
+
+        # ----------------------------------------------------
+        # 日志
+        # ----------------------------------------------------
+
+        log_frame = ttk.LabelFrame(
+            outer,
+            text="运行日志",
+            padding=8
+        )
+
+        log_frame.pack(
+            fill="both",
+            expand=True,
+            pady=(12, 0)
+        )
 
         self.log = tk.Text(
             log_frame,
@@ -153,274 +351,684 @@ class App:
             font=("Consolas", 10),
             state="disabled"
         )
+
         scrollbar = ttk.Scrollbar(
-            log_frame, orient="vertical", command=self.log.yview
+            log_frame,
+            orient="vertical",
+            command=self.log.yview
         )
-        self.log.configure(yscrollcommand=scrollbar.set)
-        self.log.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+
+        self.log.configure(
+            yscrollcommand=scrollbar.set
+        )
+
+        self.log.pack(
+            side="left",
+            fill="both",
+            expand=True
+        )
+
+        scrollbar.pack(
+            side="right",
+            fill="y"
+        )
+
+    # ========================================================
+    # GUI 操作
+    # ========================================================
 
     def choose_dir(self):
-        d = filedialog.askdirectory(initialdir=self.dir_var.get() or str(Path.home()))
+
+        d = filedialog.askdirectory(
+            initialdir=(
+                self.dir_var.get()
+                or str(Path.home())
+            )
+        )
+
         if d:
             self.dir_var.set(d)
 
     def open_dir(self):
-        d = Path(self.dir_var.get()).expanduser()
+
+        d = Path(
+            self.dir_var.get()
+        ).expanduser()
+
         try:
-            d.mkdir(parents=True, exist_ok=True)
+            d.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
             os.startfile(str(d))
+
         except Exception as e:
-            messagebox.showerror("错误", str(e))
+            messagebox.showerror(
+                "错误",
+                str(e)
+            )
+
+    # ========================================================
+    # 消息
+    # ========================================================
 
     def log_msg(self, text):
-        self.msg_queue.put(("log", text))
+        self.msg_queue.put(
+            ("log", text)
+        )
 
     def status(self, text):
-        self.msg_queue.put(("status", text))
+        self.msg_queue.put(
+            ("status", text)
+        )
 
     def stats(self):
-        self.msg_queue.put(("stats", None))
+        self.msg_queue.put(
+            ("stats", None)
+        )
 
     def update_progress(self, current, total):
-        value = 0 if total <= 0 else current * 100 / total
-        self.msg_queue.put(("progress", value))
+
+        value = (
+            0
+            if total <= 0
+            else current * 100 / total
+        )
+
+        self.msg_queue.put(
+            ("progress", value)
+        )
+
+    # ========================================================
+    # 开始
+    # ========================================================
 
     def start(self):
+
         if self.worker and self.worker.is_alive():
             return
 
         year_text = self.year_var.get().strip()
-        if not re.fullmatch(r"\d{4}", year_text):
-            messagebox.showerror("输入错误", "年份必须是 4 位数字，例如 2026。")
+
+        if not re.fullmatch(
+            r"\d{4}",
+            year_text
+        ):
+            messagebox.showerror(
+                "输入错误",
+                "年份必须是 4 位数字，例如 2026。"
+            )
             return
 
         save_root = self.dir_var.get().strip()
+
         if not save_root:
-            messagebox.showerror("输入错误", "保存目录不能为空。")
+            messagebox.showerror(
+                "输入错误",
+                "保存目录不能为空。"
+            )
             return
 
-        self.success = self.skip = self.fail = 0
+        # 重置统计
+        self.success = 0
+        self.skip = 0
+        self.not_published = 0
+        self.fail = 0
         self.failed_rows = []
+
         self.stop_event.clear()
+
         self.progress_var.set(0)
-        self.status_var.set("准备开始...")
+
+        self.status_var.set(
+            "准备开始..."
+        )
+
+        self.count_var.set(
+            "成功：0    跳过：0    未发布：0    失败：0"
+        )
+
         self.log_clear()
 
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
+        self.start_btn.config(
+            state="disabled"
+        )
+
+        self.stop_btn.config(
+            state="normal"
+        )
 
         mode = self.type_var.get()
         year = int(year_text)
-        root_dir = Path(save_root).expanduser()
+        root_dir = Path(
+            save_root
+        ).expanduser()
 
         self.worker = threading.Thread(
             target=self.run_download,
-            args=(mode, year, root_dir),
+            args=(
+                mode,
+                year,
+                root_dir
+            ),
             daemon=True
         )
+
         self.worker.start()
 
-    def stop(self):
-        self.stop_event.set()
-        self.status("正在停止，请等待当前请求结束...")
-        self.stop_btn.config(state="disabled")
+    # ========================================================
+    # 停止
+    # ========================================================
 
-    def run_download(self, mode, year, root_dir):
+    def stop(self):
+
+        self.stop_event.set()
+
+        self.status(
+            "正在停止，请等待当前请求结束..."
+        )
+
+        self.stop_btn.config(
+            state="disabled"
+        )
+
+    # ========================================================
+    # 下载主任务
+    # ========================================================
+
+    def run_download(
+        self,
+        mode,
+        year,
+        root_dir
+    ):
+
         try:
-            save_dir = root_dir / str(year)
-            save_dir.mkdir(parents=True, exist_ok=True)
+
+            save_dir = (
+                root_dir
+                / str(year)
+            )
+
+            save_dir.mkdir(
+                parents=True,
+                exist_ok=True
+            )
 
             if mode == "中国版航海通告":
-                self.download_cn(year, save_dir)
-            else:
-                self.download_ukho(year, save_dir)
 
+                self.download_cn(
+                    year,
+                    save_dir
+                )
+
+            else:
+
+                self.download_ukho(
+                    year,
+                    save_dir
+                )
+
+            # 写失败记录
             if self.failed_rows:
-                self.write_failed_csv(save_dir)
+
+                self.write_failed_csv(
+                    save_dir
+                )
 
             if self.stop_event.is_set():
-                self.status("已停止")
-                self.log_msg("下载任务已停止。")
-            else:
-                self.status("下载完成")
-                self.log_msg("")
-                self.log_msg("==================================================")
-                self.log_msg("下载完成")
-                self.log_msg(
-                    f"成功：{self.success}    跳过：{self.skip}    失败：{self.fail}"
+
+                self.status(
+                    "已停止"
                 )
-                self.log_msg(f"保存目录：{save_dir}")
+
+                self.log_msg(
+                    "下载任务已停止。"
+                )
+
+            else:
+
+                self.status(
+                    "下载完成"
+                )
+
+                self.log_msg("")
+                self.log_msg(
+                    "=================================================="
+                )
+
+                self.log_msg(
+                    "下载完成"
+                )
+
+                self.log_msg(
+                    f"成功：{self.success}    "
+                    f"跳过：{self.skip}    "
+                    f"未发布：{self.not_published}    "
+                    f"失败：{self.fail}"
+                )
+
+                self.log_msg(
+                    f"保存目录：{save_dir}"
+                )
+
                 if self.failed_rows:
-                    self.log_msg(f"失败记录：{save_dir / 'failed.csv'}")
+
+                    self.log_msg(
+                        f"失败记录："
+                        f"{save_dir / 'failed.csv'}"
+                    )
 
         except Exception as e:
-            self.status("任务失败")
-            self.log_msg(f"错误：{e}")
+
+            self.status(
+                "任务失败"
+            )
+
+            self.log_msg(
+                f"错误：{e}"
+            )
+
         finally:
-            self.msg_queue.put(("finished", None))
+
+            self.msg_queue.put(
+                ("finished", None)
+            )
+
+    # ========================================================
+    # Session
+    # ========================================================
 
     def make_session(self):
+
         s = requests.Session()
-        s.headers.update({
-            "User-Agent": USER_AGENT,
-            "Accept": "*/*",
-        })
+
+        s.headers.update(
+            {
+                "User-Agent": USER_AGENT,
+                "Accept": "*/*",
+            }
+        )
+
         return s
 
-    def download_cn(self, year, save_dir):
+    # ========================================================
+    # 中国版
+    # ========================================================
+
+    def download_cn(
+        self,
+        year,
+        save_dir
+    ):
+
         session = self.make_session()
-        session.headers.update({
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-        })
 
-        self.status("正在访问中国版网站...")
-        self.log_msg("正在访问中国海军海道测量局网站...")
-        r = session.get(CN_LIST_PAGE, timeout=30)
-        r.raise_for_status()
-        self.log_msg("网站访问成功。")
+        session.headers.update(
+            {
+                "Accept":
+                    "application/json, "
+                    "text/javascript, */*; q=0.01",
+            }
+        )
 
-        self.status(f"正在获取 {year} 年航海通告列表...")
-        r = session.post(
-            CN_LIST_API,
-            data={"year": str(year)},
+        self.status(
+            "正在访问中国版网站..."
+        )
+
+        self.log_msg(
+            "正在访问中国海军海道测量局网站..."
+        )
+
+        r = session.get(
+            CN_LIST_PAGE,
             timeout=30
         )
+
+        r.raise_for_status()
+
+        self.log_msg(
+            "网站访问成功。"
+        )
+
+        self.status(
+            f"正在获取 {year} 年航海通告列表..."
+        )
+
+        r = session.post(
+            CN_LIST_API,
+            data={
+                "year": str(year)
+            },
+            timeout=30
+        )
+
         r.raise_for_status()
 
         try:
+
             data = r.json()
+
         except Exception:
+
             raise DownloaderError(
                 "服务器返回的内容不是有效 JSON。\n"
                 + r.text[:500]
             )
 
         if not data.get("success"):
+
             raise DownloaderError(
-                "服务器返回 success=false。\n" + r.text[:500]
+                "服务器返回 success=false。\n"
+                + r.text[:500]
             )
 
         items = data.get("result") or []
+
         if not items:
-            self.log_msg(f"{year} 年没有找到航海通告。")
-            self.progress(100, 100)
+
+            self.log_msg(
+                f"{year} 年没有找到航海通告。"
+            )
+
+            self.update_progress(
+                100,
+                100
+            )
+
             return
 
-        self.log_msg(f"找到 {len(items)} 期航海通告。")
+        self.log_msg(
+            f"找到 {len(items)} 期航海通告。"
+        )
+
         total = len(items)
 
-        for index, item in enumerate(items, 1):
+        for index, item in enumerate(
+            items,
+            1
+        ):
+
             if self.stop_event.is_set():
                 break
 
-            notice_year = str(item.get("year", year))
-            notice_num = str(item.get("noticeNum", ""))
-            item_id = str(item.get("id", ""))
+            notice_year = str(
+                item.get(
+                    "year",
+                    year
+                )
+            )
 
-            filename = f"{notice_year}-{notice_num}.pdf"
-            local_file = save_dir / filename
+            notice_num = str(
+                item.get(
+                    "noticeNum",
+                    ""
+                )
+            )
 
-            self.status(f"正在处理：{filename}")
-            self.log_msg(f"[{index}/{total}] {filename}")
+            item_id = str(
+                item.get(
+                    "id",
+                    ""
+                )
+            )
 
-            if local_file.exists() and local_file.stat().st_size > 0:
+            filename = (
+                f"{notice_year}-"
+                f"{notice_num}.pdf"
+            )
+
+            local_file = (
+                save_dir
+                / filename
+            )
+
+            self.status(
+                f"正在处理：{filename}"
+            )
+
+            self.log_msg(
+                f"[{index}/{total}] "
+                f"{filename}"
+            )
+
+            # 文件存在
+            if (
+                local_file.exists()
+                and local_file.stat().st_size > 0
+                and is_pdf(local_file)
+            ):
+
                 self.skip += 1
-                self.log_msg("  文件已存在，跳过。")
-                self.update_progress(index, total)
+
+                self.log_msg(
+                    "  文件已存在，跳过。"
+                )
+
+                self.update_progress(
+                    index,
+                    total
+                )
+
                 self.stats()
+
                 continue
 
+            # ID 无效
             if not item_id:
+
                 self.fail += 1
-                self.failed_rows.append({
-                    "type": "CN",
-                    "year": notice_year,
-                    "notice": notice_num,
-                    "week": "",
-                    "id": "",
-                    "url": "",
-                    "error": "接口返回的 id 为空"
-                })
-                self.log_msg("  失败：接口返回的 id 为空。")
-                self.update_progress(index, total)
+
+                self.failed_rows.append(
+                    {
+                        "type": "CN",
+                        "year": notice_year,
+                        "notice": notice_num,
+                        "week": "",
+                        "id": "",
+                        "url": "",
+                        "error":
+                            "接口返回的 id 为空"
+                    }
+                )
+
+                self.log_msg(
+                    "  失败：接口返回的 id 为空。"
+                )
+
+                self.update_progress(
+                    index,
+                    total
+                )
+
                 self.stats()
+
                 continue
 
-            url = f"{CN_DOWNLOAD_API}?id={quote(item_id, safe='')}"
+            url = (
+                f"{CN_DOWNLOAD_API}"
+                f"?id={quote(item_id, safe='')}"
+            )
 
             try:
-                self.download_file(session, url, local_file)
-                self.success += 1
-                self.log_msg(
-                    f"  下载成功 ✓  {local_file.stat().st_size / 1024 / 1024:.2f} MB"
-                )
-            except Exception as e:
-                safe_remove(local_file)
-                self.fail += 1
-                self.failed_rows.append({
-                    "type": "CN",
-                    "year": notice_year,
-                    "notice": notice_num,
-                    "week": "",
-                    "id": item_id,
-                    "url": url,
-                    "error": str(e)
-                })
-                self.log_msg(f"  下载失败 ✗  {e}")
 
-            self.update_progress(index, total)
+                self.download_file(
+                    session,
+                    url,
+                    local_file
+                )
+
+                self.success += 1
+
+                self.log_msg(
+                    f"  下载成功 ✓  "
+                    f"{local_file.stat().st_size / 1024 / 1024:.2f} MB"
+                )
+
+            except Exception as e:
+
+                safe_remove(
+                    local_file
+                )
+
+                self.fail += 1
+
+                self.failed_rows.append(
+                    {
+                        "type": "CN",
+                        "year": notice_year,
+                        "notice": notice_num,
+                        "week": "",
+                        "id": item_id,
+                        "url": url,
+                        "error": str(e)
+                    }
+                )
+
+                self.log_msg(
+                    f"  下载失败 ✗  {e}"
+                )
+
+            self.update_progress(
+                index,
+                total
+            )
+
             self.stats()
+
             time.sleep(0.5)
 
-    def download_ukho(self, year, save_dir):
-        session = self.make_session()
-        session.headers.update({
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        })
+    # ========================================================
+    # UKHO
+    # ========================================================
 
-        self.status("正在访问 UKHO 网站...")
-        self.log_msg("正在访问 UKHO Weekly Notices...")
-        r = session.get(UK_WEEKLY, timeout=30)
+    def download_ukho(
+        self,
+        year,
+        save_dir
+    ):
+
+        session = self.make_session()
+
+        session.headers.update(
+            {
+                "Accept":
+                    "text/html,"
+                    "application/xhtml+xml,"
+                    "application/xml;q=0.9,"
+                    "*/*;q=0.8"
+            }
+        )
+
+        self.status(
+            "正在访问 UKHO 网站..."
+        )
+
+        self.log_msg(
+            "正在访问 UKHO Weekly Notices..."
+        )
+
+        r = session.get(
+            UK_WEEKLY,
+            timeout=30
+        )
+
         r.raise_for_status()
 
+        # ----------------------------------------------------
+        # 获取 RequestVerificationToken
+        # ----------------------------------------------------
+
         token_match = re.search(
-            r'name="__RequestVerificationToken"\s+type="hidden"\s+value="([^"]+)"',
+            r'name=["\']__RequestVerificationToken["\']'
+            r'[^>]*'
+            r'value=["\']([^"\']+)["\']',
             r.text,
             re.I
         )
-        if not token_match:
-            # 容错：属性顺序或换行变化时再次尝试
-            token_match = re.search(
-                r'name=["\']__RequestVerificationToken["\'][^>]*value=["\']([^"\']+)',
-                r.text,
-                re.I
-            )
-        if not token_match:
-            raise DownloaderError("无法找到 __RequestVerificationToken。")
 
-        token = html.unescape(token_match.group(1))
+        if not token_match:
+
+            raise DownloaderError(
+                "无法找到 __RequestVerificationToken。"
+            )
+
+        token = html.unescape(
+            token_match.group(1)
+        )
+
         year_short = str(year)[-2:]
-        self.log_msg("已获取 RequestVerificationToken。")
+
+        self.log_msg(
+            "已获取 RequestVerificationToken。"
+        )
+
+        # ----------------------------------------------------
+        # UKHO 一年最多 53 周
+        #
+        # 这里不是假定 53 周都存在，而是逐周检查。
+        # 找不到对应文件 → 未发布
+        # 找到 → 下载
+        # ----------------------------------------------------
 
         total = 53
+
         for week in range(1, 54):
+
             if self.stop_event.is_set():
                 break
 
             week_text = f"{week:02d}"
-            filename = f"{week_text}wknm{year_short}.pdf"
-            local_file = save_dir / filename
 
-            self.status(f"正在处理：Week {week} / 53")
-            self.log_msg(f"[{week}/53] {filename}")
+            filename = (
+                f"{week_text}"
+                f"wknm"
+                f"{year_short}"
+                f".pdf"
+            )
 
-            if local_file.exists() and local_file.stat().st_size > 0:
+            local_file = (
+                save_dir
+                / filename
+            )
+
+            self.status(
+                f"正在处理：Week {week} / {total}"
+            )
+
+            self.log_msg(
+                f"[{week}/{total}] {filename}"
+            )
+
+            # ------------------------------------------------
+            # 本地已经存在
+            # ------------------------------------------------
+
+            if (
+                local_file.exists()
+                and local_file.stat().st_size > 0
+                and is_pdf(local_file)
+            ):
+
                 self.skip += 1
-                self.log_msg("  文件已存在，跳过。")
-                self.update_progress(week, total)
+
+                self.log_msg(
+                    "  文件已存在，跳过。"
+                )
+
+                self.update_progress(
+                    week,
+                    total
+                )
+
                 self.stats()
+
                 continue
+
+            # ------------------------------------------------
+            # POST 获取对应 Week 页面
+            # ------------------------------------------------
 
             post_data = {
                 "year": str(year),
@@ -429,186 +1037,527 @@ class App:
             }
 
             try:
+
                 response = session.post(
                     UK_WEEKLY,
                     data=post_data,
                     timeout=30
                 )
+
                 response.raise_for_status()
+
             except Exception as e:
+
                 self.fail += 1
-                self.failed_rows.append({
-                    "type": "UKHO",
-                    "year": str(year),
-                    "notice": "",
-                    "week": str(week),
-                    "id": "",
-                    "url": "",
-                    "error": f"获取 Week 页面失败：{e}"
-                })
-                self.log_msg(f"  获取页面失败 ✗  {e}")
-                self.update_progress(week, total)
+
+                self.failed_rows.append(
+                    {
+                        "type": "UKHO",
+                        "year": str(year),
+                        "notice": "",
+                        "week": str(week),
+                        "id": "",
+                        "url": UK_WEEKLY,
+                        "error":
+                            f"获取 Week 页面失败：{e}"
+                    }
+                )
+
+                self.log_msg(
+                    f"  获取页面失败 ✗  {e}"
+                )
+
+                self.update_progress(
+                    week,
+                    total
+                )
+
                 self.stats()
+
                 time.sleep(1)
+
                 continue
 
-            download_url = self.find_ukho_download_url(
-                response.text, filename
+            # ------------------------------------------------
+            # 查找 PDF 下载地址
+            # ------------------------------------------------
+
+            download_url = (
+                self.find_ukho_download_url(
+                    response.text,
+                    filename
+                )
             )
 
+            # ------------------------------------------------
+            # 宽松搜索
+            # ------------------------------------------------
+
             if not download_url:
-                # UKHO 后期页面有时结构会变化，再做一次宽松搜索
-                escaped = re.escape(filename)
+
+                escaped = re.escape(
+                    filename
+                )
+
+                pattern = (
+                    r'href=["\']'
+                    r'([^"\']*?'
+                    r'/NoticesToMariners/'
+                    r'DownloadFile\?'
+                    r'[^"\']*?'
+                    r'fileName='
+                    + escaped +
+                    r'[^"\']*)'
+                    r'["\']'
+                )
+
                 m = re.search(
-                    rf'href=["\']([^"\']*?/NoticesToMariners/DownloadFile\?[^"\']*?fileName={escaped}[^"\']*)["\']',
+                    pattern,
                     response.text,
                     re.I
                 )
+
                 if m:
-                    download_url = html.unescape(m.group(1))
+
+                    download_url = html.unescape(
+                        m.group(1)
+                    )
+
+            # ------------------------------------------------
+            # 没找到 → 该周不存在
+            # ------------------------------------------------
 
             if not download_url:
-                self.skip += 1
-                self.log_msg("  未找到对应文件，跳过。")
-                self.update_progress(week, total)
+
+                self.not_published += 1
+
+                self.log_msg(
+                    "  该周未发布，跳过。"
+                )
+
+                self.update_progress(
+                    week,
+                    total
+                )
+
                 self.stats()
+
                 continue
 
-            download_url = html.unescape(download_url)
-            download_url = urljoin(UK_BASE, download_url)
+            # ------------------------------------------------
+            # 拼接完整 URL
+            # ------------------------------------------------
+
+            download_url = html.unescape(
+                download_url
+            )
+
+            download_url = urljoin(
+                UK_BASE,
+                download_url
+            )
+
+            # ------------------------------------------------
+            # 下载 PDF
+            # ------------------------------------------------
 
             try:
-                self.download_file(session, download_url, local_file)
-                self.success += 1
-                self.log_msg(
-                    f"  下载成功 ✓  {local_file.stat().st_size / 1024 / 1024:.2f} MB"
-                )
-            except Exception as e:
-                safe_remove(local_file)
-                self.fail += 1
-                self.failed_rows.append({
-                    "type": "UKHO",
-                    "year": str(year),
-                    "notice": "",
-                    "week": str(week),
-                    "id": "",
-                    "url": download_url,
-                    "error": str(e)
-                })
-                self.log_msg(f"  下载失败 ✗  {e}")
 
-            self.update_progress(week, total)
+                self.download_file(
+                    session,
+                    download_url,
+                    local_file
+                )
+
+                self.success += 1
+
+                self.log_msg(
+                    f"  下载成功 ✓  "
+                    f"{local_file.stat().st_size / 1024 / 1024:.2f} MB"
+                )
+
+            except Exception as e:
+
+                safe_remove(
+                    local_file
+                )
+
+                self.fail += 1
+
+                self.failed_rows.append(
+                    {
+                        "type": "UKHO",
+                        "year": str(year),
+                        "notice": "",
+                        "week": str(week),
+                        "id": "",
+                        "url": download_url,
+                        "error": str(e)
+                    }
+                )
+
+                self.log_msg(
+                    f"  下载失败 ✗  {e}"
+                )
+
+            self.update_progress(
+                week,
+                total
+            )
+
             self.stats()
+
             time.sleep(0.5)
 
+    # ========================================================
+    # UKHO 下载地址解析
+    # ========================================================
+
     @staticmethod
-    def find_ukho_download_url(page_html, filename):
-        escaped = re.escape(filename)
+    def find_ukho_download_url(
+        page_html,
+        filename
+    ):
 
-        # 优先：直接在 href 中找到对应 filename
-        pattern = (
-            rf'href=["\']([^"\']*?/NoticesToMariners/DownloadFile\?'
-            rf'[^"\']*?fileName={escaped}[^"\']*)["\']'
+        escaped = re.escape(
+            filename
         )
-        m = re.search(pattern, page_html, re.I)
-        if m:
-            return html.unescape(m.group(1))
 
-        # 与原 PowerShell 一致：先找到 filename_1，再在附近找 DownloadFile
-        stem = re.escape(filename[:-4])
-        fm = re.search(
-            rf'<td\s+id=["\']filename_1["\']\s*>\s*{stem}\s*</td>',
+        # ----------------------------------------------------
+        # 方法一：直接寻找对应 fileName
+        # ----------------------------------------------------
+
+        pattern = (
+            r'href=["\']'
+            r'([^"\']*?'
+            r'/NoticesToMariners/'
+            r'DownloadFile\?'
+            r'[^"\']*?'
+            r'fileName='
+            + escaped +
+            r'[^"\']*)'
+            r'["\']'
+        )
+
+        m = re.search(
+            pattern,
             page_html,
             re.I
         )
+
+        if m:
+
+            return html.unescape(
+                m.group(1)
+            )
+
+        # ----------------------------------------------------
+        # 方法二：
+        # 找 filename_1
+        # 再从附近 HTML 查找 DownloadFile
+        # ----------------------------------------------------
+
+        stem = re.escape(
+            filename[:-4]
+        )
+
+        fm = re.search(
+            r'<td\s+'
+            r'id=["\']filename_1["\']'
+            r'\s*>\s*'
+            + stem +
+            r'\s*</td>',
+            page_html,
+            re.I
+        )
+
         if fm:
-            section = page_html[fm.start():fm.start() + 10000]
+
+            section = page_html[
+                fm.start():
+                fm.start() + 10000
+            ]
+
             m = re.search(
-                r'href=["\']([^"\']*?/NoticesToMariners/DownloadFile\?[^"\']*)["\']',
+                r'href=["\']'
+                r'([^"\']*?'
+                r'/NoticesToMariners/'
+                r'DownloadFile\?'
+                r'[^"\']*)'
+                r'["\']',
                 section,
                 re.I
             )
+
             if m:
-                return html.unescape(m.group(1))
+
+                return html.unescape(
+                    m.group(1)
+                )
 
         return None
 
-    @staticmethod
-    def download_file(session, url, path):
-        temp = path.with_suffix(path.suffix + ".part")
-        safe_remove(temp)
+    # ========================================================
+    # 文件下载
+    # ========================================================
 
-        with session.get(url, stream=True, timeout=60) as r:
+    @staticmethod
+    def download_file(
+        session,
+        url,
+        path
+    ):
+
+        temp = path.with_suffix(
+            path.suffix + ".part"
+        )
+
+        safe_remove(
+            temp
+        )
+
+        with session.get(
+            url,
+            stream=True,
+            timeout=60
+        ) as r:
+
             r.raise_for_status()
 
-            with temp.open("wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 128):
-                    if chunk:
-                        f.write(chunk)
+            with temp.open(
+                "wb"
+            ) as f:
 
-        if not temp.exists() or temp.stat().st_size <= 0:
-            safe_remove(temp)
-            raise DownloaderError("下载文件大小为 0。")
+                for chunk in r.iter_content(
+                    chunk_size=1024 * 128
+                ):
+
+                    if chunk:
+
+                        f.write(
+                            chunk
+                        )
+
+        # ----------------------------------------------------
+        # 检查文件大小
+        # ----------------------------------------------------
+
+        if (
+            not temp.exists()
+            or temp.stat().st_size <= 0
+        ):
+
+            safe_remove(
+                temp
+            )
+
+            raise DownloaderError(
+                "下载文件大小为 0。"
+            )
+
+        # ----------------------------------------------------
+        # 检查 PDF
+        # ----------------------------------------------------
 
         if not is_pdf(temp):
-            safe_remove(temp)
-            raise DownloaderError("服务器返回的文件不是 PDF。")
 
-        temp.replace(path)
+            safe_remove(
+                temp
+            )
 
-    def write_failed_csv(self, save_dir):
-        path = save_dir / "failed.csv"
-        fields = ["type", "year", "notice", "week", "id", "url", "error"]
-        with path.open("w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fields)
+            raise DownloaderError(
+                "服务器返回的文件不是 PDF。"
+            )
+
+        # ----------------------------------------------------
+        # 下载完成后再替换正式文件
+        # ----------------------------------------------------
+
+        temp.replace(
+            path
+        )
+
+    # ========================================================
+    # failed.csv
+    # ========================================================
+
+    def write_failed_csv(
+        self,
+        save_dir
+    ):
+
+        path = (
+            save_dir
+            / "failed.csv"
+        )
+
+        fields = [
+            "type",
+            "year",
+            "notice",
+            "week",
+            "id",
+            "url",
+            "error"
+        ]
+
+        with path.open(
+            "w",
+            newline="",
+            encoding="utf-8-sig"
+        ) as f:
+
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fields
+            )
+
             writer.writeheader()
-            writer.writerows(self.failed_rows)
+
+            writer.writerows(
+                self.failed_rows
+            )
+
+    # ========================================================
+    # 清空日志
+    # ========================================================
 
     def log_clear(self):
-        self.log.config(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.config(state="disabled")
+
+        self.log.config(
+            state="normal"
+        )
+
+        self.log.delete(
+            "1.0",
+            "end"
+        )
+
+        self.log.config(
+            state="disabled"
+        )
+
+    # ========================================================
+    # 消息队列处理
+    # ========================================================
 
     def process_queue(self):
+
         try:
+
             while True:
-                kind, data = self.msg_queue.get_nowait()
+
+                kind, data = (
+                    self.msg_queue.get_nowait()
+                )
+
+                # ------------------------------
+                # 日志
+                # ------------------------------
+
                 if kind == "log":
-                    self.log.config(state="normal")
-                    self.log.insert("end", str(data) + "\n")
-                    self.log.see("end")
-                    self.log.config(state="disabled")
+
+                    self.log.config(
+                        state="normal"
+                    )
+
+                    self.log.insert(
+                        "end",
+                        str(data) + "\n"
+                    )
+
+                    self.log.see(
+                        "end"
+                    )
+
+                    self.log.config(
+                        state="disabled"
+                    )
+
+                # ------------------------------
+                # 状态
+                # ------------------------------
+
                 elif kind == "status":
-                    self.status_var.set(str(data))
+
+                    self.status_var.set(
+                        str(data)
+                    )
+
+                # ------------------------------
+                # 统计
+                # ------------------------------
+
                 elif kind == "stats":
+
                     self.count_var.set(
                         f"成功：{self.success}    "
                         f"跳过：{self.skip}    "
+                        f"未发布：{self.not_published}    "
                         f"失败：{self.fail}"
                     )
+
+                # ------------------------------
+                # 进度
+                # ------------------------------
+
                 elif kind == "progress":
-                    self.progress_var.set(float(data))
+
+                    self.progress_var.set(
+                        float(data)
+                    )
+
+                # ------------------------------
+                # 完成
+                # ------------------------------
+
                 elif kind == "finished":
-                    self.start_btn.config(state="normal")
-                    self.stop_btn.config(state="disabled")
+
+                    self.start_btn.config(
+                        state="normal"
+                    )
+
+                    self.stop_btn.config(
+                        state="disabled"
+                    )
+
                     self.count_var.set(
                         f"成功：{self.success}    "
                         f"跳过：{self.skip}    "
+                        f"未发布：{self.not_published}    "
                         f"失败：{self.fail}"
                     )
+
         except queue.Empty:
+
             pass
 
-        self.root.after(100, self.process_queue)
+        self.root.after(
+            100,
+            self.process_queue
+        )
 
+
+# ============================================================
+# 程序入口
+# ============================================================
 
 def main():
+
     root = tk.Tk()
+
     try:
-        root.iconname("航海通告下载器")
+
+        root.iconname(
+            "航海通告下载器"
+        )
+
     except Exception:
+
         pass
+
     App(root)
+
     root.mainloop()
 
 
