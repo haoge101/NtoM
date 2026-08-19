@@ -418,7 +418,7 @@ class App:
             if local_file.exists() and local_file.stat().st_size > 0:
                 self.skip += 1
                 self.log_msg("  文件已存在，跳过。")
-                self.progress(week, total)
+                self.update_progress(week, total)
                 self.stats()
                 continue
 
@@ -447,7 +447,7 @@ class App:
                     "error": f"获取 Week 页面失败：{e}"
                 })
                 self.log_msg(f"  获取页面失败 ✗  {e}")
-                self.progress(week, total)
+                self.update_progress(week, total)
                 self.stats()
                 time.sleep(1)
                 continue
@@ -470,7 +470,7 @@ class App:
             if not download_url:
                 self.skip += 1
                 self.log_msg("  未找到对应文件，跳过。")
-                self.progress(week, total)
+                self.update_progress(week, total)
                 self.stats()
                 continue
 
@@ -497,7 +497,7 @@ class App:
                 })
                 self.log_msg(f"  下载失败 ✗  {e}")
 
-            self.progress(week, total)
+            self.update_progress(week, total)
             self.stats()
             time.sleep(0.5)
 
