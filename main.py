@@ -182,7 +182,7 @@ class App:
     def stats(self):
         self.msg_queue.put(("stats", None))
 
-    def progress(self, current, total):
+    def update_progress(self, current, total):
         value = 0 if total <= 0 else current * 100 / total
         self.msg_queue.put(("progress", value))
 
@@ -327,7 +327,7 @@ class App:
             if local_file.exists() and local_file.stat().st_size > 0:
                 self.skip += 1
                 self.log_msg("  文件已存在，跳过。")
-                self.progress(index, total)
+                self.update_progress(index, total)
                 self.stats()
                 continue
 
@@ -343,7 +343,7 @@ class App:
                     "error": "接口返回的 id 为空"
                 })
                 self.log_msg("  失败：接口返回的 id 为空。")
-                self.progress(index, total)
+                self.update_progress(index, total)
                 self.stats()
                 continue
 
@@ -369,7 +369,7 @@ class App:
                 })
                 self.log_msg(f"  下载失败 ✗  {e}")
 
-            self.progress(index, total)
+            self.update_progress(index, total)
             self.stats()
             time.sleep(0.5)
 
